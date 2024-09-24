@@ -22,6 +22,10 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"os"
 
 	"cosmossdk.io/store"
 	types "github.com/berachain/beacon-kit/mod/cli/pkg/commands/server/types"
@@ -118,6 +122,18 @@ func StatusCommand() *cobra.Command {
 	return cmd
 }
 
+type privValidatorKey struct {
+	Address string `json:"address"`
+	PubKey  struct {
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	} `json:"pub_key"`
+	PrivKey struct {
+		Type  string `json:"type"`
+		Value string `json:"value"`
+	} `json:"priv_key"`
+}
+
 // ShowNodeIDCmd - ported from CometBFT, dump node ID to stdout.
 func ShowNodeIDCmd() *cobra.Command {
 	return &cobra.Command{
@@ -143,24 +159,51 @@ func ShowValidatorCmd() *cobra.Command {
 		Short: "Show this node's CometBFT validator info",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := clicontext.GetConfigFromCmd(cmd)
+
+			privValidatorKeyFile := cfg.PrivValidatorKeyFile()
+
+			fileContent, err := os.ReadFile(privValidatorKeyFile)
+			if err != nil {
+				return fmt.Errorf("failed to read private validator key file: %w", err)
+			}
+
+			var privValidatorKey privValidatorKey
+			if err := json.Unmarshal(fileContent, &privValidatorKey); err != nil {
+				return fmt.Errorf("failed to unmarshal private validator key file: %w", err)
+			}
+
 			privValidator := pvm.LoadFilePV(
 				cfg.PrivValidatorKeyFile(),
 				cfg.PrivValidatorStateFile(),
 			)
+
+			if privValidator == nil {
+				return fmt.Errorf("failed to load private validator")
+			}
+
 			pk, err := privValidator.GetPubKey()
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to get public key: %w", err)
 			}
 
 			sdkPK, err := cryptocodec.FromCmtPubKeyInterface(pk)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to convert public key: %w", err)
 			}
 
-			clientCtx := client.GetClientContextFromCmd(cmd)
-			bz, err := clientCtx.Codec.MarshalInterfaceJSON(sdkPK)
+			pubKeyBytes := sdkPK.Bytes()
+
+			output := struct {
+				Type  string `json:"type"`
+				Value string `json:"value"`
+			}{
+				Type:  privValidatorKey.PubKey.Type,
+				Value: base64.StdEncoding.EncodeToString(pubKeyBytes),
+			}
+
+			bz, err := json.Marshal(output)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to marshal output: %w", err)
 			}
 
 			cmd.Println(string(bz))
